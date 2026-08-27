@@ -32,9 +32,9 @@ guard before the MCP layer is even reached. You'll see it as:
 Streamable HTTP error: Error POSTing to endpoint: {"error":"unsupported request"}
 ```
 
-Your other MCP servers (wikijs, headroom, etc.) work fine out of the box
+Other MCP servers (wikijs, headroom, etc.) work fine out of the box
 because they are "dumb" MCP servers — they don't inspect or reject the kind
-of client that connects. Neo does.
+of client that connects. BrowserOS neo does.
 
 ### The fix
 
@@ -85,10 +85,10 @@ headed browser profile is what gets through Google's CAPTCHA check
 
 1. **Node.js ≥ 18** on the target machine (`node --version` to check;
    built-in `fetch` is the only non-trivial feature used). To install on a
-   fresh Windows box: `winget install OpenJS.NodeJS.LTS` (or
+   fresh Windows box: `winget install OpenJS.NodeJS.LTS` (or install from
    https://nodejs.org), then open a **new** terminal.
 2. **BrowserOS neo running** on that machine — the neo/claw server with the
-   MCP endpoint up. No auth token is required for the local endpoint.
+   MCP endpoint up. No auth token is required for a local endpoint.
 3. Nothing else. There is no `package.json`, no `node_modules`, no install
    step.
 
