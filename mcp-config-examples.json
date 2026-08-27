@@ -1,0 +1,51 @@
+{
+  "_copyright": "Copyright (C) 2026 Marc Christensen <mecworks@gmail.com>",
+  "_comment": "Sample MCP config sections for the BrowserOS neo stdio bridge. Use the section that matches your client. Replace <path-to-browser-mcp-bridge> with the full path to the folder you placed this bridge in (e.g. C:\\Users\\<you>\\Documents\\browser-mcp-bridge). Transport is STDIO (command: node) — do NOT point clients at the HTTP URL directly; Electron clients get 403 'unsupported request' from neo's anti-browser guard, which is the whole reason this bridge exists.",
+
+  "chatbox": {
+    "_comment": "Chatbox: add this object to the settings.mcp.servers array in %APPDATA%\\xyz.chatboxapp.app\\config.json (or create the entry via the MCP UI — Chatbox will add its own 'id' UUID). Shape verified working on Windows 2026-08-26.",
+    "server": {
+      "name": "BrowserOS",
+      "enabled": true,
+      "transport": {
+        "type": "stdio",
+        "command": "node",
+        "args": [
+          "<path-to-browser-mcp-bridge>\\neo-mcp-bridge.mjs"
+        ],
+        "env": {
+          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp"
+        }
+      }
+    }
+  },
+
+  "generic_mcpServers": {
+    "_comment": "Standard .mcp.json / claude_desktop_config.json / most other clients: mcpServers map keyed by server name.",
+    "mcpServers": {
+      "browseros": {
+        "command": "node",
+        "args": [
+          "<path-to-browser-mcp-bridge>/neo-mcp-bridge.mjs"
+        ],
+        "env": {
+          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp"
+        }
+      }
+    }
+  },
+
+  "notes": {
+    "transport_type": "stdio (the bridge is the stdio side; it forwards to neo over HTTP internally)",
+    "node_version_min": "18 (built-in fetch)",
+    "env_BROWSEROS_MCP_URL": {
+      "optional": true,
+      "default": "http://127.0.0.1:9210/mcp",
+      "alternatives": {
+        "http://127.0.0.1:9010/mcp": "local proxy port — also verified working"
+      }
+    },
+    "prerequisite": "BrowserOS neo (claw) server running on the same machine; no auth token needed for the local endpoint",
+    "verify": "cd <bridge folder> && node bridge-test.mjs   → expect 'ALL PASSED' + 20 tools"
+  }
+}
