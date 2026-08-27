@@ -1,0 +1,5 @@
+# Keep the repository consistently LF.
+# `text=auto` lets Git normalize line endings at commit time;
+# `eol=lf` forces LF on checkout on every platform (Windows included),
+# preventing CRLF regression from Windows clones/editors.
+* text=auto eol=lf
