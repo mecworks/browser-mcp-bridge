@@ -50,8 +50,8 @@ Chatbox / Hermes / Claude Desktop        this process             BrowserOS neo
         (stdio MCP client)                (Node.js)              (Rust server)
            │                               │                       │
            │  JSON-RPC over stdin/stdout   │  HTTP POST (clean)    │
-           └──────────────────────────────► │ ────────────────────► │
-                    ◄───────────────────────┘ ◄───────────────────── │
+           └─────────────────────────────► │ ────────────────────► │
+                    ◄──────────────────────┘ ◄──────────────────── │
            (JSON-RPC on stdout)                (SSE + JSON response)
 ```
 
