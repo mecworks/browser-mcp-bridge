@@ -1,4 +1,4 @@
-# neo-mcp-bridge — BrowserOS neo for MCP clients that get blocked
+# neo-mcp-bridge — BrowserOS neo bridge for MCP clients that get blocked
 
 **A single-file, zero-dependency stdio↔HTTP bridge that lets Chatbox, Hermes,
 Claude Desktop, or any standard MCP client talk to the BrowserOS neo (claw)
