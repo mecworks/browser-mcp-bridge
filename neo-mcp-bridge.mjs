@@ -23,6 +23,15 @@
 // CONFIG:  BROWSEROS_MCP_URL   default http://127.0.0.1:9210/mcp
 //          (9010 also works; see README.md — 9210 is the direct port,
 //           9010 the local proxy port)
+//          BROWSEROS_BRIDGE_TIMEOUT_MS       default 120000 — abort one
+//                                            upstream request after this
+//                                            many ms (0 = no timeout)
+//          BROWSEROS_BRIDGE_MAX_RESPONSE_MB  default 10 — max upstream
+//                                            response body size (MiB);
+//                                            0 = no limit
+//          BROWSEROS_BRIDGE_ALLOW_REMOTE     default unset — set 1/true/yes/on
+//                                            to silence the non-localhost
+//                                            upstream warning (F3)
 //
 // PROTOCOL: MCP over streamable HTTP (protocol version 2025-06-18).
 //           The initialize response carries an `mcp-session-id` header that
@@ -31,8 +40,46 @@
 //           the session goes stale and the bridge re-initializes once before
 //           retrying (one retry per request; beyond that, error out).
 
+const VERSION = "1.1.0";
 const NEO_URL = process.env.BROWSEROS_MCP_URL || "http://127.0.0.1:9210/mcp";
 const PROTOCOL_VERSION = "2025-06-18";
+
+// ---- Operational limits (overridable via env vars; see README.md) ----------
+// Non-negative number from env, or the default if unset/invalid.
+function envNum(name, dflt) {
+  const n = Number(process.env[name]);
+  return Number.isFinite(n) && n >= 0 ? n : dflt;
+}
+// M1: a stalled upstream must not wedge the bridge (per-request timeout).
+const TIMEOUT_MS = envNum("BROWSEROS_BRIDGE_TIMEOUT_MS", 120_000); // ms, 0 = off
+// M2: an oversized upstream response must not exhaust memory (body cap).
+// 0 = no limit; an invalid value falls back to the default.
+const _maxRespMb = envNum("BROWSEROS_BRIDGE_MAX_RESPONSE_MB", 10);
+const MAX_RESPONSE_BYTES = _maxRespMb > 0 ? _maxRespMb * 1024 * 1024 : Infinity;
+// F3: remote upstreams are supported; only loopback hosts are exempt from
+// the startup warning (BROWSEROS_BRIDGE_ALLOW_REMOTE silences it entirely).
+const ALLOW_REMOTE = /^(1|true|yes|on)$/i.test(process.env.BROWSEROS_BRIDGE_ALLOW_REMOTE ?? "");
+
+const neoUrl = (() => {
+  try {
+    const u = new URL(NEO_URL);
+    if (!/^https?:$/.test(u.protocol))
+      throw new Error(`BROWSEROS_MCP_URL must be http(s): ${NEO_URL}`);
+    return u;
+  } catch (e) {
+    if (e instanceof TypeError)
+      console.error(`[neo-bridge] BROWSEROS_MCP_URL is not a valid URL: ${NEO_URL}`);
+    else console.error(`[neo-bridge] ${e.message}`);
+    process.exit(1);
+  }
+})();
+const LOCAL_HOSTS = new Set(["127.0.0.1", "localhost", "0.0.0.0", "::1"]);
+if (!LOCAL_HOSTS.has(neoUrl.hostname.toLowerCase()) && !ALLOW_REMOTE) {
+  console.warn(
+    `[neo-bridge] WARNING: upstream host '${neoUrl.hostname}' is not localhost — ` +
+    `remote use is supported; set BROWSEROS_BRIDGE_ALLOW_REMOTE=1 to silence this warning.`
+  );
+}
 
 let sessionId = null;
 let initialized = false;
@@ -48,6 +95,34 @@ function errObj(e) {
   };
 }
 
+// M2: read the response body with a hard size cap. The Content-Length
+// pre-check in rpc() catches the common case; this enforces the cap
+// chunk-by-chunk for responses that omit (or lie about) Content-Length.
+async function readCapped(res) {
+  if (!res.body) return "";
+  const reader = res.body.getReader();
+  const chunks = [];
+  let total = 0;
+  try {
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) break;
+      total += value.byteLength;
+      if (total > MAX_RESPONSE_BYTES) {
+        try { await reader.cancel(); } catch { /* already aborted */ }
+        throw new Error(`neo response too large: exceeds ${MAX_RESPONSE_BYTES} byte cap`);
+      }
+      chunks.push(value);
+    }
+  } finally {
+    try { reader.releaseLock(); } catch { /* lock already released by cancel */ }
+  }
+  const buf = new Uint8Array(total);
+  let off = 0;
+  for (const c of chunks) { buf.set(c, off); off += c.byteLength; }
+  return new TextDecoder().decode(buf);
+}
+
 /** One MCP request over streamable HTTP. Returns {jsonRpc: true, value} or a raw object. */
 async function rpc(method, params, id) {
   const headers = {
@@ -60,12 +135,21 @@ async function rpc(method, params, id) {
     method: "POST",
     headers,
     body: JSON.stringify({ jsonrpc: "2.0", method, params, id }),
+    redirect: "manual", // F4: never follow a 3xx — following would send the
+    // Mcp-Session-Id header to the redirect target and return the
+    // redirect target's response to the client.
+    signal: TIMEOUT_MS > 0 ? AbortSignal.timeout(TIMEOUT_MS) : undefined, // M1
   });
 
   const sid = res.headers.get("mcp-session-id");
   if (sid) sessionId = sid;
 
-  const text = await res.text();
+  // M2: reject oversized upstream responses before buffering them.
+  const cl = Number(res.headers.get("content-length"));
+  if (Number.isFinite(cl) && cl > MAX_RESPONSE_BYTES)
+    throw new Error(`neo response too large: ${cl} bytes (cap ${MAX_RESPONSE_BYTES})`);
+
+  const text = await readCapped(res);
   if (!res.ok) {
     const e = new Error(`neo ${res.status}: ${text.slice(0, 300)}`);
     e.stale = /session/i.test(text);
@@ -120,7 +204,7 @@ async function doInitialize() {
   const r = await rpc("initialize", {
     protocolVersion: PROTOCOL_VERSION,
     capabilities: {},
-    clientInfo: { name: "neo-mcp-bridge", version: "1.0.0" },
+    clientInfo: { name: "neo-mcp-bridge", version: VERSION },
   }, 0);
   if (!r?.serverInfo) throw new Error("neo initialize returned no serverInfo: " + JSON.stringify(r).slice(0, 200));
   initialized = true;
@@ -151,7 +235,18 @@ import { createInterface } from "node:readline";
 
 const rl = createInterface({ input: process.stdin });
 
-rl.on("line", async (line) => {
+// F5: serialize stdin handling so at most one request is in flight at a
+// time. The stale-session re-init path resets shared session state and
+// assumes exclusive access; MCP clients serialize per connection anyway.
+let lineQueue = Promise.resolve();
+
+rl.on("line", (line) => {
+  lineQueue = lineQueue
+    .then(() => handleLine(line))
+    .catch((e) => console.error("[neo-bridge] unhandled error:", e?.message || e));
+});
+
+async function handleLine(line) {
   line = line.trim();
   if (!line) return;
   let msg;
@@ -166,7 +261,7 @@ rl.on("line", async (line) => {
         reply(id, {
           protocolVersion: PROTOCOL_VERSION,
           capabilities: { tools: {} },
-          serverInfo: { name: "BrowserOS neo (stdio bridge)", version: "1.0.0" },
+          serverInfo: { name: "BrowserOS neo (stdio bridge)", version: VERSION },
         });
         log(`client ${params?.clientInfo?.name || "?"} connected`);
         break;
@@ -188,8 +283,12 @@ rl.on("line", async (line) => {
     log(`error on ${method}: ${e?.message || e}`);
     if (id !== undefined) replyErr(id, String(e?.message || e));
   }
-});
+}
 
 rl.on("close", () => process.exit(0));
 
-log(`neo-mcp-bridge on stdio -> ${NEO_URL} (zero-dep, Node >= 18)`);
+log(
+  `neo-mcp-bridge v${VERSION} on stdio -> ${NEO_URL} ` +
+  `(timeout ${TIMEOUT_MS ? TIMEOUT_MS + " ms" : "none"}, ` +
+  `response cap ${MAX_RESPONSE_BYTES === Infinity ? "none" : (MAX_RESPONSE_BYTES / 1048576) + " MiB"}, zero-dep, Node >= 18)`
+);

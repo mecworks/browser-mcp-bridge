@@ -4,6 +4,9 @@
 Claude Desktop, or any standard MCP client talk to the BrowserOS neo (claw)
 server on your machine.**
 
+**Version 1.1.0 (2026-08-28)** — protocol `2025-06-18`, Node ≥ 18, zero
+dependencies.
+
 ---
 
 ## Why this exists
@@ -75,9 +78,11 @@ headed browser profile is what gets through Google's CAPTCHA check
 | File | Purpose |
 |---|---|
 | `neo-mcp-bridge.mjs` | The bridge. One file, **no npm dependencies**. |
-| `bridge-test.mjs` | Self-test: spawns the bridge like a client would and runs `initialize` → `tools/list` → `tools/call(tabs)`. |
+| `bridge-test.mjs` | Self-test (v1.1.0): hermetic mock-upstream suite covering the hardening fixes (timeout, size cap, redirects, serialization, URL validation — no neo needed) + live `initialize` → `tools/list` → `tools/call(tabs)` round-trip. Flags: `--mock-only` / `--live-only`. |
 | `mcp-config-examples.json` | Ready-to-paste MCP config sections (Chatbox, Hermes, Claude Desktop). |
 | `README.md` | This file. |
+| `CHANGELOG.md` | Version history and notable changes. |
+| `.gitattributes` | Enforces LF line endings on all platforms. |
 
 ---
 
@@ -112,7 +117,11 @@ headed browser profile is what gets through Google's CAPTCHA check
    node bridge-test.mjs
    ```
 
-   Expected output ends with `ALL PASSED` and lists 20 tools.
+   Expected: 34 hermetic mock-upstream checks (T1-T7) that run **without
+   neo**, then a live end-to-end against neo, ending with `ALL PASSED` (and
+   the 20-tool list). If neo is not running, the live suite is skipped with
+   a notice and the mock suite still passes. Typical runtime ~20 s.
+   Flags: `--mock-only` (neo not needed), `--live-only` (neo required).
 
 4. Add the MCP server entry to your client (see
    `mcp-config-examples.json`), then restart the client.
@@ -150,6 +159,26 @@ copied to):
 > `env` is optional — the default URL is `http://127.0.0.1:9210/mcp` — but
 > keeping it explicit means the config documents exactly where it points.
 
+The `env` object also takes three **optional** overrides (all may be omitted;
+defaults apply):
+
+```json
+{
+  "env": {
+    "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp",
+    "BROWSEROS_BRIDGE_TIMEOUT_MS": "180000",
+    "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "50",
+    "BROWSEROS_BRIDGE_ALLOW_REMOTE": "1"
+  }
+}
+```
+
+| Env var | Default | Meaning |
+|---|---|---|
+| `BROWSEROS_BRIDGE_TIMEOUT_MS` | `120000` (120 s) | Max ms a single upstream request may take before the bridge aborts it and returns a JSON-RPC error. `0` disables. |
+| `BROWSEROS_BRIDGE_MAX_RESPONSE_MB` | `10` (MiB) | Largest upstream response body the bridge will buffer; bigger responses are rejected and aborted. `0` disables the limit; invalid values fall back to the default. |
+| `BROWSEROS_BRIDGE_ALLOW_REMOTE` | unset | `1`/`true`/`yes`/`on` silences the startup warning for a non-localhost upstream (see [Remote upstream](#remote-upstream-optional)). |
+
 ### Generic MCP client (`.mcp.json` / `claude_desktop_config.json` style)
 
 ```json
@@ -159,7 +188,10 @@ copied to):
       "command": "node",
       "args": ["<path-to-browser-mcp-bridge>/neo-mcp-bridge.mjs"],
       "env": {
-        "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp"
+        "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp",
+        "BROWSEROS_BRIDGE_TIMEOUT_MS": "120000",
+        "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "10",
+        "BROWSEROS_BRIDGE_ALLOW_REMOTE": "1"
       }
     }
   }
@@ -182,9 +214,46 @@ also fine if JSON-escaped.)
 
 | Setting | Where | Default | Notes |
 |---|---|---|---|
-| Upstream URL | env `BROWSEROS_MCP_URL` | `http://127.0.0.1:9210/mcp` | `9210` = direct port, `9010` = local proxy port. Both verified working; 9210 recommended. |
+| Upstream URL | env `BROWSEROS_MCP_URL` | `http://127.0.0.1:9210/mcp` | `9210` = direct port, `9010` = local proxy port. Both verified working; 9210 recommended. Must be `http`/`https`; validated at startup. |
+| Upstream request timeout | env `BROWSEROS_BRIDGE_TIMEOUT_MS` | `120000` (120 s) | Max ms a single upstream HTTP request may take before the bridge aborts it and returns a JSON-RPC error. Protects the bridge from a wedged upstream. `0` = no timeout. |
+| Upstream response size cap | env `BROWSEROS_BRIDGE_MAX_RESPONSE_MB` | `10` (MiB) | Largest upstream response body the bridge will buffer; bigger responses are rejected and aborted (checked via `Content-Length` and chunk-by-chunk). Protects memory. `0` = no limit; invalid → default. |
+| Allow remote upstream | env `BROWSEROS_BRIDGE_ALLOW_REMOTE` | unset (warn) | Set `1`/`true`/`yes`/`on` to silence the startup warning when the upstream host is not localhost. See [Remote upstream](#remote-upstream-optional). |
 | Transport | — | stdio (fixed) | The bridge *is* the stdio side; there is no mode to switch. |
 | Protocol | — | `2025-06-18` | Matches the MCP version neo speaks. |
+
+### Remote upstream (optional)
+
+The bridge is built for a **local** neo server, but pointing
+`BROWSEROS_MCP_URL` at a non-localhost host works as-is — remote use is
+supported. When the host is not loopback, the bridge logs a warning on
+startup so an accidental/misconfigured remote endpoint stands out:
+
+```
+[neo-bridge] WARNING: upstream host 'mcp.example.com' is not localhost — remote use is supported; set BROWSEROS_BRIDGE_ALLOW_REMOTE=1 to silence this warning.
+```
+
+Before using a remote endpoint, note that:
+
+- Your MCP client's tool calls **and their results transit that host** —
+  anything sensitive in your browser sessions is visible to it.
+- The bridge performs **no upstream authentication** and sends no
+  credentials; a remote endpoint needs its own trust model.
+- The timeout and response-size cap apply to remote use too (and are even
+  more important there).
+
+When the remote endpoint is intentional, set the flag in `env` to keep the
+client's stderr clean:
+
+```json
+{
+  "env": {
+    "BROWSEROS_MCP_URL": "https://mcp.example.com/mcp",
+    "BROWSEROS_BRIDGE_ALLOW_REMOTE": "1",
+    "BROWSEROS_BRIDGE_TIMEOUT_MS": "180000",
+    "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "50"
+  }
+}
+```
 
 ## Protocol notes (how the bridge talks to neo)
 
@@ -206,9 +275,10 @@ also fine if JSON-escaped.)
 
 ## Limitations
 
-- One request in flight at a time (requests are processed sequentially per
-  line on stdin). MCP clients serialize `tools/call` per connection in
-  practice, so this is fine for normal agent use.
+- One request in flight at a time. Since v1.1.0 the bridge *enforces* this:
+  stdin lines are serialized through an internal queue before they reach the
+  upstream. MCP clients serialize `tools/call` per connection in practice,
+  so this is fine for normal agent use.
 - The bridge forwards `initialize`, `tools/list`, and `tools/call`. Neo's
   tool set (v0.0.44) is tools-only, so nothing else is needed; any future
   method returns a clean JSON-RPC error rather than hanging.
@@ -221,6 +291,9 @@ also fine if JSON-escaped.)
 | `403 unsupported request` | A *different* client is talking to neo directly with browser headers (or a proxy injected them). Make sure the client entry points at the **bridge** (stdio), not at the HTTP URL. |
 | `406 Not Acceptable` | A client that omits `text/event-stream` from `Accept` — i.e., it's not using this bridge. Use the bridge. |
 | `session … invalid` then success | Normal: neo was restarted mid-session; the bridge re-initialized automatically. |
+| `error: … aborted due to timeout` on one request | The upstream didn't answer within `BROWSEROS_BRIDGE_TIMEOUT_MS` (default 120 s). Neo may be wedged — restart it — or raise the timeout in `env` for slow round-trips. Subsequent requests still work normally. |
+| `neo response too large … (cap …)` | The upstream response exceeded `BROWSEROS_BRIDGE_MAX_RESPONSE_MB` (default 10 MiB). Raise the env var if you legitimately expect very large tool results. |
+| `BROWSEROS_MCP_URL must be http(s)` / `not a valid URL` at startup | Typo in the `BROWSEROS_MCP_URL` env value — check for missing scheme or stray characters. |
 | `node: command not found` (Linux/macOS client) | Put `node` on PATH for the client, or use the absolute path to `node` in `command`. |
 
 

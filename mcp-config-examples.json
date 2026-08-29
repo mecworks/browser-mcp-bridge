@@ -14,7 +14,10 @@
           "<path-to-browser-mcp-bridge>\\neo-mcp-bridge.mjs"
         ],
         "env": {
-          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp"
+          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp",
+          "BROWSEROS_BRIDGE_TIMEOUT_MS": "120000",
+          "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "10",
+          "BROWSEROS_BRIDGE_ALLOW_REMOTE": "0"
         }
       }
     }
@@ -29,13 +32,17 @@
           "<path-to-browser-mcp-bridge>/neo-mcp-bridge.mjs"
         ],
         "env": {
-          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp"
+          "BROWSEROS_MCP_URL": "http://127.0.0.1:9210/mcp",
+          "BROWSEROS_BRIDGE_TIMEOUT_MS": "120000",
+          "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "10",
+          "BROWSEROS_BRIDGE_ALLOW_REMOTE": "1"
         }
       }
     }
   },
 
   "notes": {
+    "version": "1.1.0",
     "transport_type": "stdio (the bridge is the stdio side; it forwards to neo over HTTP internally)",
     "node_version_min": "18 (built-in fetch)",
     "env_BROWSEROS_MCP_URL": {
@@ -45,7 +52,29 @@
         "http://127.0.0.1:9010/mcp": "local proxy port — also verified working"
       }
     },
+    "env_BROWSEROS_BRIDGE_TIMEOUT_MS": {
+      "optional": true,
+      "default": "120000",
+      "what": "max ms a single upstream request may take before the bridge aborts it and returns a JSON-RPC error; 0 disables the timeout"
+    },
+    "env_BROWSEROS_BRIDGE_MAX_RESPONSE_MB": {
+      "optional": true,
+      "default": "10",
+      "what": "max upstream response body in MiB; larger responses are rejected and aborted; 0 = no limit; invalid values fall back to the default"
+    },
+    "env_BROWSEROS_BRIDGE_ALLOW_REMOTE": {
+      "optional": true,
+      "default": "unset",
+      "what": "1/true/yes/on silences the startup warning when BROWSEROS_MCP_URL points at a non-localhost host"
+    },
+    "remote_use": "Pointing BROWSEROS_MCP_URL at a non-localhost host is supported: the bridge warns at startup unless BROWSEROS_BRIDGE_ALLOW_REMOTE is set. Tool calls and their results transit that host, and the bridge sends no credentials — only use endpoints you trust.",
+    "remote_example": {
+      "BROWSEROS_MCP_URL": "https://mcp.example.com/mcp",
+      "BROWSEROS_BRIDGE_ALLOW_REMOTE": "1",
+      "BROWSEROS_BRIDGE_TIMEOUT_MS": "180000",
+      "BROWSEROS_BRIDGE_MAX_RESPONSE_MB": "50"
+    },
     "prerequisite": "BrowserOS neo (claw) server running on the same machine; no auth token needed for the local endpoint",
-    "verify": "cd <bridge folder> && node bridge-test.mjs   → expect 'ALL PASSED' + 20 tools"
+    "verify": "cd <bridge folder> && node bridge-test.mjs   → 34 mock checks (no neo needed) + live round-trip; expect 'ALL PASSED' (the live suite is skipped with a notice if neo is not running). Flags: --mock-only / --live-only"
   }
 }
