@@ -27,7 +27,7 @@ non-browser HTTP clients can drive the MCP endpoint — a deliberate
 client-identification choice, not a bug.
 
 The catch: **Electron-based apps attach `Sec-Fetch-Site: same-site` to every
-`fetch()` call.** Chatbox (and similar Electron apps) therefore cannot use
+`fetch()` call.** Chatbox, Hermes (and similar Electron apps) therefore cannot use
 the neo server's HTTP MCP endpoint directly — every request dies at the
 guard before the MCP layer is even reached. You'll see it as:
 
